@@ -1,4 +1,4 @@
-package com.ecommerce.backend.domain;
+package com.ecommerce.backend.product.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -9,23 +9,19 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
-import java.time.LocalDateTime;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
-import org.hibernate.annotations.CreationTimestamp;
 
-// base_price + additional_price >= 0 is a cross-table rule (product.base_price),
-// so it's enforced in the service layer, not as a DB CHECK constraint.
 @Entity
-@Table(name = "product_option")
+@Table(name = "product_image")
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @Builder
-public class ProductOption {
+public class ProductImage {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -35,16 +31,13 @@ public class ProductOption {
     @JoinColumn(name = "product_id", nullable = false)
     private Product product;
 
-    @Column(name = "option_name", nullable = false, length = 100)
-    private String optionName;
+    @Column(name = "image_url", nullable = false, length = 500)
+    private String imageUrl;
 
-    @Column(name = "additional_price", nullable = false)
-    private Integer additionalPrice;
+    @Column(name = "sort_order", nullable = false)
+    private Integer sortOrder;
 
-    @Column(nullable = false)
-    private Integer stock;
-
-    @CreationTimestamp
-    @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt;
+    void assignProduct(Product product) {
+        this.product = product;
+    }
 }

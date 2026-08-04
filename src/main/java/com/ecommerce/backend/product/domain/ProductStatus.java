@@ -1,4 +1,4 @@
-package com.ecommerce.backend.domain;
+package com.ecommerce.backend.product.domain;
 
 public enum ProductStatus {
     ON_SALE,     // 기본 판매 상태
