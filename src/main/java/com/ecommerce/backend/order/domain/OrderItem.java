@@ -1,6 +1,10 @@
-package com.ecommerce.backend.domain;
+package com.ecommerce.backend.order.domain;
 
+import com.ecommerce.backend.product.domain.Money;
+import com.ecommerce.backend.product.domain.ProductOption;
+import jakarta.persistence.AttributeOverride;
 import jakarta.persistence.Column;
+import jakarta.persistence.Embedded;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
@@ -38,9 +42,14 @@ public class OrderItem {
     @Column(name = "product_name", nullable = false, length = 200)
     private String productName;
 
-    @Column(name = "order_price", nullable = false)
-    private Integer orderPrice;
+    @Embedded
+    @AttributeOverride(name = "amount", column = @Column(name = "order_price", nullable = false))
+    private Money orderPrice;
 
     @Column(nullable = false)
     private Integer quantity;
+
+    void assignOrder(Order order) {
+        this.order = order;
+    }
 }
