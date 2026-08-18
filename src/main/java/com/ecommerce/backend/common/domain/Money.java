@@ -1,4 +1,4 @@
-package com.ecommerce.backend.product.domain;
+package com.ecommerce.backend.common.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Embeddable;

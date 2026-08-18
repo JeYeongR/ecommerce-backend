@@ -1,6 +1,6 @@
 package com.ecommerce.backend.order.domain;
 
-import com.ecommerce.backend.product.domain.Money;
+import com.ecommerce.backend.common.domain.Money;
 import com.ecommerce.backend.product.domain.ProductOption;
 import jakarta.persistence.AttributeOverride;
 import jakarta.persistence.Column;
