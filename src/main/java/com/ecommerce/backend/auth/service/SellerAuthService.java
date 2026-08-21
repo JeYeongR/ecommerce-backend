@@ -6,11 +6,13 @@ import com.ecommerce.backend.auth.dto.SellerSignupResponse;
 import com.ecommerce.backend.auth.dto.TokenResponse;
 import com.ecommerce.backend.common.BusinessException;
 import com.ecommerce.backend.common.ErrorCode;
+import com.ecommerce.backend.common.concurrent.KeyLockManager;
 import com.ecommerce.backend.seller.domain.Seller;
 import com.ecommerce.backend.seller.repository.SellerRepository;
 import com.ecommerce.backend.security.AccountType;
 import com.ecommerce.backend.security.JwtProvider;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,9 +25,14 @@ public class SellerAuthService {
     private final SellerRepository sellerRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtProvider jwtProvider;
+    private final KeyLockManager keyLockManager;
 
     @Transactional
     public SellerSignupResponse signup(SellerSignupRequest request) {
+        return keyLockManager.withLock(request.email(), () -> createSeller(request));
+    }
+
+    private SellerSignupResponse createSeller(SellerSignupRequest request) {
         if (sellerRepository.existsByEmail(request.email())) {
             throw new BusinessException(ErrorCode.EMAIL_ALREADY_EXISTS);
         }
@@ -36,7 +43,11 @@ public class SellerAuthService {
             .shopName(request.shopName())
             .build();
 
-        sellerRepository.save(seller);
+        try {
+            sellerRepository.save(seller);
+        } catch (DataIntegrityViolationException e) {
+            throw new BusinessException(ErrorCode.EMAIL_ALREADY_EXISTS);
+        }
 
         return new SellerSignupResponse(seller.getId(), seller.getEmail(), seller.getShopName());
     }

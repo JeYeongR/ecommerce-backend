@@ -3,7 +3,7 @@ package com.ecommerce.backend.product.service;
 import com.ecommerce.backend.common.BusinessException;
 import com.ecommerce.backend.common.ErrorCode;
 import com.ecommerce.backend.common.PageResponse;
-import com.ecommerce.backend.product.domain.Money;
+import com.ecommerce.backend.common.domain.Money;
 import com.ecommerce.backend.product.domain.Product;
 import com.ecommerce.backend.product.domain.ProductImage;
 import com.ecommerce.backend.product.domain.ProductOption;
