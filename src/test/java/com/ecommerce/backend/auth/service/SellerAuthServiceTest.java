@@ -3,6 +3,7 @@ package com.ecommerce.backend.auth.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 
 import com.ecommerce.backend.auth.dto.LoginRequest;
@@ -11,12 +12,13 @@ import com.ecommerce.backend.auth.dto.SellerSignupResponse;
 import com.ecommerce.backend.auth.dto.TokenResponse;
 import com.ecommerce.backend.common.BusinessException;
 import com.ecommerce.backend.common.ErrorCode;
-import com.ecommerce.backend.common.concurrent.KeyLockManager;
+import com.ecommerce.backend.common.concurrent.LockedTransactionExecutor;
 import com.ecommerce.backend.security.AccountType;
 import com.ecommerce.backend.security.JwtProvider;
 import com.ecommerce.backend.seller.domain.Seller;
 import com.ecommerce.backend.seller.repository.SellerRepository;
 import java.util.Optional;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -37,15 +39,26 @@ class SellerAuthServiceTest {
     @Mock
     private JwtProvider jwtProvider;
 
+    @Mock
+    private LockedTransactionExecutor lockedTransactionExecutor;
+
     private SellerAuthService sellerAuthService;
 
     @BeforeEach
     void setUp() {
-        sellerAuthService = new SellerAuthService(sellerRepository, passwordEncoder, jwtProvider, new KeyLockManager());
+        sellerAuthService = new SellerAuthService(sellerRepository, passwordEncoder, jwtProvider, lockedTransactionExecutor);
+    }
+
+    private void stubLockPassthrough() {
+        given(lockedTransactionExecutor.executeWithLock(anyString(), any())).willAnswer(invocation -> {
+            Supplier<?> action = invocation.getArgument(1);
+            return action.get();
+        });
     }
 
     @Test
     void 회원가입_성공() {
+        stubLockPassthrough();
         SellerSignupRequest request = new SellerSignupRequest("seller@test.com", "password", "샵이름");
         given(sellerRepository.existsByEmail(request.email())).willReturn(false);
         given(passwordEncoder.encode(request.password())).willReturn("encoded");
@@ -64,6 +77,7 @@ class SellerAuthServiceTest {
 
     @Test
     void 회원가입_이메일_중복이면_예외() {
+        stubLockPassthrough();
         SellerSignupRequest request = new SellerSignupRequest("seller@test.com", "password", "샵이름");
         given(sellerRepository.existsByEmail(request.email())).willReturn(true);
 

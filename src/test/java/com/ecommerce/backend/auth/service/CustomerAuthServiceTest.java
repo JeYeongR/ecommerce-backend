@@ -3,6 +3,7 @@ package com.ecommerce.backend.auth.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 
 import com.ecommerce.backend.auth.dto.CustomerSignupResponse;
@@ -11,12 +12,13 @@ import com.ecommerce.backend.auth.dto.SignupRequest;
 import com.ecommerce.backend.auth.dto.TokenResponse;
 import com.ecommerce.backend.common.BusinessException;
 import com.ecommerce.backend.common.ErrorCode;
-import com.ecommerce.backend.common.concurrent.KeyLockManager;
+import com.ecommerce.backend.common.concurrent.LockedTransactionExecutor;
 import com.ecommerce.backend.customer.domain.Customer;
 import com.ecommerce.backend.customer.repository.CustomerRepository;
 import com.ecommerce.backend.security.AccountType;
 import com.ecommerce.backend.security.JwtProvider;
 import java.util.Optional;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -37,15 +39,26 @@ class CustomerAuthServiceTest {
     @Mock
     private JwtProvider jwtProvider;
 
+    @Mock
+    private LockedTransactionExecutor lockedTransactionExecutor;
+
     private CustomerAuthService customerAuthService;
 
     @BeforeEach
     void setUp() {
-        customerAuthService = new CustomerAuthService(customerRepository, passwordEncoder, jwtProvider, new KeyLockManager());
+        customerAuthService = new CustomerAuthService(customerRepository, passwordEncoder, jwtProvider, lockedTransactionExecutor);
+    }
+
+    private void stubLockPassthrough() {
+        given(lockedTransactionExecutor.executeWithLock(anyString(), any())).willAnswer(invocation -> {
+            Supplier<?> action = invocation.getArgument(1);
+            return action.get();
+        });
     }
 
     @Test
     void 회원가입_성공() {
+        stubLockPassthrough();
         SignupRequest request = new SignupRequest("test@test.com", "password", "이름", "닉네임");
         given(customerRepository.existsByEmail(request.email())).willReturn(false);
         given(passwordEncoder.encode(request.password())).willReturn("encoded");
@@ -64,6 +77,7 @@ class CustomerAuthServiceTest {
 
     @Test
     void 회원가입_이메일_중복이면_예외() {
+        stubLockPassthrough();
         SignupRequest request = new SignupRequest("test@test.com", "password", "이름", "닉네임");
         given(customerRepository.existsByEmail(request.email())).willReturn(true);
 

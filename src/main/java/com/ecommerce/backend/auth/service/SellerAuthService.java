@@ -6,7 +6,7 @@ import com.ecommerce.backend.auth.dto.SellerSignupResponse;
 import com.ecommerce.backend.auth.dto.TokenResponse;
 import com.ecommerce.backend.common.BusinessException;
 import com.ecommerce.backend.common.ErrorCode;
-import com.ecommerce.backend.common.concurrent.KeyLockManager;
+import com.ecommerce.backend.common.concurrent.LockedTransactionExecutor;
 import com.ecommerce.backend.seller.domain.Seller;
 import com.ecommerce.backend.seller.repository.SellerRepository;
 import com.ecommerce.backend.security.AccountType;
@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -25,11 +26,11 @@ public class SellerAuthService {
     private final SellerRepository sellerRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtProvider jwtProvider;
-    private final KeyLockManager keyLockManager;
+    private final LockedTransactionExecutor lockedTransactionExecutor;
 
-    @Transactional
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public SellerSignupResponse signup(SellerSignupRequest request) {
-        return keyLockManager.withLock(request.email(), () -> createSeller(request));
+        return lockedTransactionExecutor.executeWithLock(request.email(), () -> createSeller(request));
     }
 
     private SellerSignupResponse createSeller(SellerSignupRequest request) {

@@ -2,20 +2,26 @@ package com.ecommerce.backend.common.concurrent;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
-import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
-class KeyLockManagerTest {
+@SpringBootTest
+class RedisLockManagerTest {
 
     private static final int THREAD_COUNT = 20;
 
-    private final KeyLockManager keyLockManager = new KeyLockManager();
+    @Autowired
+    private RedisLockManager redisLockManager;
+
+    @Autowired
+    private StringRedisTemplate redisTemplate;
 
     @Test
     void 같은_키로_동시_접근하면_상호배제된다() throws InterruptedException {
@@ -28,7 +34,7 @@ class KeyLockManagerTest {
             executor.submit(() -> {
                 try {
                     startLatch.await();
-                    keyLockManager.withLock("same-key", () -> {
+                    redisLockManager.withLock("same-key", () -> {
                         int current = counter.get();
                         counter.set(current + 1);
                         return null;
@@ -49,29 +55,9 @@ class KeyLockManagerTest {
     }
 
     @Test
-    void 락이_다_풀리면_내부_맵에서_키가_제거된다() throws InterruptedException {
-        ExecutorService executor = Executors.newFixedThreadPool(THREAD_COUNT);
-        CountDownLatch startLatch = new CountDownLatch(1);
-        CountDownLatch doneLatch = new CountDownLatch(THREAD_COUNT);
+    void 락이_풀리면_레디스에서_키가_삭제된다() {
+        redisLockManager.withLock("cleanup-key", () -> null);
 
-        for (int i = 0; i < THREAD_COUNT; i++) {
-            executor.submit(() -> {
-                try {
-                    startLatch.await();
-                    keyLockManager.withLock("cleanup-key", () -> null);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                } finally {
-                    doneLatch.countDown();
-                }
-            });
-        }
-
-        startLatch.countDown();
-        doneLatch.await(10, TimeUnit.SECONDS);
-        executor.shutdown();
-
-        Map<?, ?> locks = (Map<?, ?>) ReflectionTestUtils.getField(keyLockManager, "locks");
-        assertThat(locks).isEmpty();
+        assertThat(redisTemplate.hasKey("lock:cleanup-key")).isFalse();
     }
 }
