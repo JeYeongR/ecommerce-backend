@@ -3,10 +3,13 @@ package com.ecommerce.backend.order.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.verify;
 
 import com.ecommerce.backend.common.BusinessException;
 import com.ecommerce.backend.common.ErrorCode;
+import com.ecommerce.backend.common.concurrent.RedisLockManager;
 import com.ecommerce.backend.common.domain.Money;
 import com.ecommerce.backend.customer.domain.Customer;
 import com.ecommerce.backend.customer.repository.CustomerRepository;
@@ -24,12 +27,16 @@ import com.ecommerce.backend.product.repository.ProductOptionRepository;
 import com.ecommerce.backend.seller.domain.Seller;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @ExtendWith(MockitoExtension.class)
 class OrderServiceTest {
@@ -43,11 +50,32 @@ class OrderServiceTest {
     @Mock
     private CustomerRepository customerRepository;
 
+    @Mock
+    private RedisLockManager redisLockManager;
+
+    @Mock
+    private TransactionTemplate transactionTemplate;
+
     private OrderService orderService;
 
     @BeforeEach
     void setUp() {
-        orderService = new OrderService(orderRepository, productOptionRepository, customerRepository);
+        orderService = new OrderService(orderRepository, productOptionRepository, customerRepository, redisLockManager, transactionTemplate);
+    }
+
+    private void stubLockAndTransactionPassthrough() {
+        given(redisLockManager.withLock(anyString(), any())).willAnswer(invocation -> {
+            Supplier<?> action = invocation.getArgument(1);
+            return action.get();
+        });
+        stubTransactionPassthrough();
+    }
+
+    private void stubTransactionPassthrough() {
+        given(transactionTemplate.execute(any())).willAnswer(invocation -> {
+            TransactionCallback<?> callback = invocation.getArgument(0);
+            return callback.doInTransaction(null);
+        });
     }
 
     private Customer customer(Long id) {
@@ -87,10 +115,11 @@ class OrderServiceTest {
 
     @Test
     void 주문_생성_성공() {
+        stubLockAndTransactionPassthrough();
         Customer customer = customer(1L);
         ProductOption option = option(10L, 5);
-        given(productOptionRepository.findAllByIdInForUpdate(List.of(10L))).willReturn(List.of(option));
         given(customerRepository.findById(1L)).willReturn(Optional.of(customer));
+        given(productOptionRepository.findAllById(Set.of(10L))).willReturn(List.of(option));
         given(orderRepository.save(any(Order.class))).willAnswer(invocation -> {
             Order order = invocation.getArgument(0);
             ReflectionTestUtils.setField(order, "id", 100L);
@@ -108,10 +137,11 @@ class OrderServiceTest {
 
     @Test
     void 같은_옵션이_여러_번_담기면_수량을_합산해서_하나의_주문항목으로_처리한다() {
+        stubLockAndTransactionPassthrough();
         Customer customer = customer(1L);
         ProductOption option = option(10L, 10);
-        given(productOptionRepository.findAllByIdInForUpdate(List.of(10L))).willReturn(List.of(option));
         given(customerRepository.findById(1L)).willReturn(Optional.of(customer));
+        given(productOptionRepository.findAllById(Set.of(10L))).willReturn(List.of(option));
         given(orderRepository.save(any(Order.class))).willAnswer(invocation -> {
             Order order = invocation.getArgument(0);
             ReflectionTestUtils.setField(order, "id", 100L);
@@ -132,9 +162,11 @@ class OrderServiceTest {
 
     @Test
     void 같은_옵션을_나눠담아도_합산된_수량으로_재고부족_판단한다() {
+        stubLockAndTransactionPassthrough();
+        Customer customer = customer(1L);
         ProductOption option = option(10L, 5);
-        given(productOptionRepository.findAllByIdInForUpdate(List.of(10L))).willReturn(List.of(option));
-        given(customerRepository.findById(1L)).willReturn(Optional.of(customer(1L)));
+        given(customerRepository.findById(1L)).willReturn(Optional.of(customer));
+        given(productOptionRepository.findAllById(Set.of(10L))).willReturn(List.of(option));
 
         OrderCreateRequest request = new OrderCreateRequest(List.of(
             new OrderItemRequest(10L, 3),
@@ -148,9 +180,11 @@ class OrderServiceTest {
 
     @Test
     void 주문_생성_재고부족이면_예외() {
+        stubLockAndTransactionPassthrough();
+        Customer customer = customer(1L);
         ProductOption option = option(10L, 1);
-        given(productOptionRepository.findAllByIdInForUpdate(List.of(10L))).willReturn(List.of(option));
-        given(customerRepository.findById(1L)).willReturn(Optional.of(customer(1L)));
+        given(customerRepository.findById(1L)).willReturn(Optional.of(customer));
+        given(productOptionRepository.findAllById(Set.of(10L))).willReturn(List.of(option));
 
         OrderCreateRequest request = new OrderCreateRequest(List.of(new OrderItemRequest(10L, 2)));
 
@@ -161,6 +195,7 @@ class OrderServiceTest {
 
     @Test
     void 주문_생성_존재하지않는_고객이면_예외() {
+        stubLockAndTransactionPassthrough();
         given(customerRepository.findById(1L)).willReturn(Optional.empty());
 
         OrderCreateRequest request = new OrderCreateRequest(List.of(new OrderItemRequest(10L, 2)));
@@ -172,8 +207,9 @@ class OrderServiceTest {
 
     @Test
     void 주문_생성_존재하지않는_옵션이면_예외() {
+        stubLockAndTransactionPassthrough();
         given(customerRepository.findById(1L)).willReturn(Optional.of(customer(1L)));
-        given(productOptionRepository.findAllByIdInForUpdate(List.of(10L))).willReturn(List.of());
+        given(productOptionRepository.findAllById(Set.of(10L))).willReturn(List.of());
 
         OrderCreateRequest request = new OrderCreateRequest(List.of(new OrderItemRequest(10L, 2)));
 
@@ -226,6 +262,7 @@ class OrderServiceTest {
 
     @Test
     void 주문_취소_성공() {
+        stubLockAndTransactionPassthrough();
         Customer customer = customer(1L);
         ProductOption option = option(10L, 3);
         Order order = Order.builder()
@@ -241,7 +278,6 @@ class OrderServiceTest {
             .quantity(2)
             .build());
         given(orderRepository.findById(100L)).willReturn(Optional.of(order));
-        given(productOptionRepository.findAllByIdInForUpdate(List.of(10L))).willReturn(List.of(option));
 
         OrderResponse response = orderService.cancel(1L, 100L);
 
@@ -251,6 +287,7 @@ class OrderServiceTest {
 
     @Test
     void 주문_취소_이미취소된_주문이면_예외() {
+        stubLockAndTransactionPassthrough();
         Customer customer = customer(1L);
         ProductOption option = option(10L, 3);
         Order order = Order.builder()
@@ -266,7 +303,6 @@ class OrderServiceTest {
             .quantity(2)
             .build());
         given(orderRepository.findById(100L)).willReturn(Optional.of(order));
-        given(productOptionRepository.findAllByIdInForUpdate(List.of(10L))).willReturn(List.of(option));
 
         assertThatThrownBy(() -> orderService.cancel(1L, 100L))
             .isInstanceOf(BusinessException.class)
@@ -275,6 +311,7 @@ class OrderServiceTest {
 
     @Test
     void 주문_취소_타인주문이면_예외() {
+        stubTransactionPassthrough();
         Customer owner = customer(1L);
         Order order = Order.builder()
             .id(100L)

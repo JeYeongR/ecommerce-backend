@@ -3,6 +3,7 @@ package com.ecommerce.backend.order.service;
 import com.ecommerce.backend.common.BusinessException;
 import com.ecommerce.backend.common.ErrorCode;
 import com.ecommerce.backend.common.PageResponse;
+import com.ecommerce.backend.common.concurrent.RedisLockManager;
 import com.ecommerce.backend.customer.domain.Customer;
 import com.ecommerce.backend.customer.repository.CustomerRepository;
 import com.ecommerce.backend.order.domain.Order;
@@ -19,13 +20,17 @@ import com.ecommerce.backend.product.domain.ProductOption;
 import com.ecommerce.backend.product.repository.ProductOptionRepository;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 @RequiredArgsConstructor
@@ -35,17 +40,24 @@ public class OrderService {
     private final OrderRepository orderRepository;
     private final ProductOptionRepository productOptionRepository;
     private final CustomerRepository customerRepository;
+    private final RedisLockManager redisLockManager;
+    private final TransactionTemplate transactionTemplate;
 
-    @Transactional
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public OrderResponse create(Long customerId, OrderCreateRequest request) {
+        Map<Long, Integer> quantities = request.items().stream()
+            .collect(Collectors.groupingBy(OrderItemRequest::productOptionId, Collectors.summingInt(OrderItemRequest::quantity)));
+        List<Long> optionIds = quantities.keySet().stream().sorted().toList();
+
+        return withOptionLocks(optionIds, () ->
+            transactionTemplate.execute(status -> doCreate(customerId, quantities)));
+    }
+
+    private OrderResponse doCreate(Long customerId, Map<Long, Integer> quantities) {
         Customer customer = customerRepository.findById(customerId)
             .orElseThrow(() -> new BusinessException(ErrorCode.CUSTOMER_NOT_FOUND));
 
-        Map<Long, Integer> quantities = request.items().stream()
-            .collect(Collectors.groupingBy(OrderItemRequest::productOptionId, Collectors.summingInt(OrderItemRequest::quantity)));
-
-        List<Long> optionIds = quantities.keySet().stream().sorted().toList();
-        Map<Long, ProductOption> options = lockOptions(optionIds);
+        Map<Long, ProductOption> options = findOptions(quantities.keySet());
 
         Order order = Order.builder()
             .customer(customer)
@@ -86,12 +98,21 @@ public class OrderService {
         return OrderResponse.of(order, itemResponses);
     }
 
-    private Map<Long, ProductOption> lockOptions(List<Long> optionIds) {
-        List<ProductOption> locked = productOptionRepository.findAllByIdInForUpdate(optionIds);
-        if (locked.size() != optionIds.size()) {
+    private Map<Long, ProductOption> findOptions(Set<Long> optionIds) {
+        List<ProductOption> found = productOptionRepository.findAllById(optionIds);
+        if (found.size() != optionIds.size()) {
             throw new BusinessException(ErrorCode.PRODUCT_OPTION_NOT_FOUND);
         }
-        return locked.stream().collect(Collectors.toMap(ProductOption::getId, Function.identity()));
+        return found.stream().collect(Collectors.toMap(ProductOption::getId, Function.identity()));
+    }
+
+    private <T> T withOptionLocks(List<Long> optionIds, Supplier<T> action) {
+        if (optionIds.isEmpty()) {
+            return action.get();
+        }
+        Long first = optionIds.get(0);
+        List<Long> rest = optionIds.subList(1, optionIds.size());
+        return redisLockManager.withLock("stock:" + first, () -> withOptionLocks(rest, action));
     }
 
     public PageResponse<OrderSummaryResponse> list(Long customerId, Pageable pageable) {
@@ -111,16 +132,24 @@ public class OrderService {
         return OrderResponse.of(order, items);
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public OrderResponse cancel(Long customerId, Long orderId) {
-        Order order = findOwnedOrder(customerId, orderId);
+        List<Long> optionIds = transactionTemplate.execute(status -> lockKeysOf(customerId, orderId));
 
-        List<Long> optionIds = order.getOrderItems().stream()
+        return withOptionLocks(optionIds, () ->
+            transactionTemplate.execute(status -> doCancel(customerId, orderId)));
+    }
+
+    private List<Long> lockKeysOf(Long customerId, Long orderId) {
+        return findOwnedOrder(customerId, orderId).getOrderItems().stream()
             .map(item -> item.getProductOption().getId())
             .distinct()
             .sorted()
             .toList();
-        lockOptions(optionIds);
+    }
+
+    private OrderResponse doCancel(Long customerId, Long orderId) {
+        Order order = findOwnedOrder(customerId, orderId);
 
         if (order.getStatus() == OrderStatus.CANCELLED) {
             throw new BusinessException(ErrorCode.ORDER_ALREADY_CANCELLED);
