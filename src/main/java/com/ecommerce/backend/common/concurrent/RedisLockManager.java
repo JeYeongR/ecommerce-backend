@@ -26,7 +26,7 @@ public class RedisLockManager {
             acquired = lock.tryLock(WAIT_SECONDS, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("락 대기 중 인터럽트 발생", e);
+            throw new BusinessException(ErrorCode.LOCK_ACQUISITION_FAILED);
         }
 
         if (!acquired) {
