@@ -20,13 +20,11 @@ import com.ecommerce.backend.order.dto.OrderCreateRequest;
 import com.ecommerce.backend.order.dto.OrderItemRequest;
 import com.ecommerce.backend.order.dto.OrderResponse;
 import com.ecommerce.backend.order.repository.OrderRepository;
-import com.ecommerce.backend.notification.NotificationService;
 import com.ecommerce.backend.product.domain.Product;
 import com.ecommerce.backend.product.domain.ProductOption;
 import com.ecommerce.backend.product.domain.ProductStatus;
 import com.ecommerce.backend.product.repository.ProductOptionRepository;
 import com.ecommerce.backend.seller.domain.Seller;
-import com.ecommerce.backend.payment.PaymentService;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -36,6 +34,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -59,16 +58,13 @@ class OrderServiceTest {
     private TransactionTemplate transactionTemplate;
 
     @Mock
-    private NotificationService notificationService;
-
-    @Mock
-    private PaymentService paymentService;
+    private ApplicationEventPublisher eventPublisher;
 
     private OrderService orderService;
 
     @BeforeEach
     void setUp() {
-        orderService = new OrderService(orderRepository, productOptionRepository, customerRepository, redisLockManager, transactionTemplate, notificationService, paymentService);
+        orderService = new OrderService(orderRepository, productOptionRepository, customerRepository, redisLockManager, transactionTemplate, eventPublisher);
     }
 
     private void stubLockAndTransactionPassthrough() {
