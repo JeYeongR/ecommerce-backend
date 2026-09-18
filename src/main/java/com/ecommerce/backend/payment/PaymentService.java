@@ -1,6 +1,6 @@
 package com.ecommerce.backend.payment;
 
-import com.ecommerce.backend.order.domain.Order;
+import com.ecommerce.backend.common.domain.Money;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -10,10 +10,9 @@ public class PaymentService {
 
     private static final long SIMULATED_LATENCY_MS = 150;
 
-    public void capturePayment(Order order) {
+    public void capturePayment(Long orderId, Money totalPrice) {
         sleep(SIMULATED_LATENCY_MS);
-        log.info("[Payment] 결제 내역 기록 orderId={} totalPrice={}",
-            order.getId(), order.getTotalPrice());
+        log.info("[Payment] 결제 내역 기록 orderId={} totalPrice={}", orderId, totalPrice.intValue());
     }
 
     private void sleep(long ms) {

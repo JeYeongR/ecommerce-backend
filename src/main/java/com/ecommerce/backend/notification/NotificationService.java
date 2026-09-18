@@ -1,6 +1,5 @@
 package com.ecommerce.backend.notification;
 
-import com.ecommerce.backend.order.domain.Order;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -10,10 +9,9 @@ public class NotificationService {
 
     private static final long SIMULATED_LATENCY_MS = 150;
 
-    public void notifyOrderCompleted(Order order) {
+    public void notifyOrderCompleted(Long orderId, Long customerId) {
         sleep(SIMULATED_LATENCY_MS);
-        log.info("[Notification] 주문 완료 알림 발송 orderId={} customerId={}",
-            order.getId(), order.getCustomer().getId());
+        log.info("[Notification] 주문 완료 알림 발송 orderId={} customerId={}", orderId, customerId);
     }
 
     private void sleep(long ms) {
