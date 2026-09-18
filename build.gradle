@@ -42,6 +42,16 @@ dependencies {
 }
 
 tasks.named('test') {
-    useJUnitPlatform()
+    useJUnitPlatform {
+        excludeTags 'benchmark'
+    }
     jvmArgs "-javaagent:${configurations.testRuntimeClasspath.find { it.name.startsWith("mockito-core") }}"
+}
+
+tasks.register('benchmark', Test) {
+    useJUnitPlatform {
+        includeTags 'benchmark'
+    }
+    jvmArgs "-javaagent:${configurations.testRuntimeClasspath.find { it.name.startsWith("mockito-core") }}"
+    outputs.upToDateWhen { false }
 }
