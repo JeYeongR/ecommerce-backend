@@ -14,7 +14,8 @@ import com.ecommerce.backend.order.dto.OrderItemRequest;
 import com.ecommerce.backend.order.dto.OrderItemResponse;
 import com.ecommerce.backend.order.dto.OrderResponse;
 import com.ecommerce.backend.order.dto.OrderSummaryResponse;
-import com.ecommerce.backend.order.event.OrderCompletedEvent;
+import com.ecommerce.backend.order.event.outbox.OutboxEvent;
+import com.ecommerce.backend.order.event.outbox.OutboxEventRepository;
 import com.ecommerce.backend.order.repository.OrderRepository;
 import com.ecommerce.backend.common.domain.Money;
 import com.ecommerce.backend.product.domain.ProductOption;
@@ -26,7 +27,6 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -44,7 +44,7 @@ public class OrderService {
     private final CustomerRepository customerRepository;
     private final RedisLockManager redisLockManager;
     private final TransactionTemplate transactionTemplate;
-    private final ApplicationEventPublisher eventPublisher;
+    private final OutboxEventRepository outboxEventRepository;
 
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public OrderResponse create(Long customerId, OrderCreateRequest request) {
@@ -94,7 +94,11 @@ public class OrderService {
         order.updateTotalPrice(totalPrice);
         orderRepository.save(order);
 
-        eventPublisher.publishEvent(new OrderCompletedEvent(order.getId(), customerId, order.getTotalPrice()));
+        outboxEventRepository.save(OutboxEvent.builder()
+            .orderId(order.getId())
+            .customerId(customerId)
+            .totalPriceAmount(order.getTotalPrice().intValue())
+            .build());
 
         List<OrderItemResponse> itemResponses = order.getOrderItems().stream()
                 .map(OrderItemResponse::from)
