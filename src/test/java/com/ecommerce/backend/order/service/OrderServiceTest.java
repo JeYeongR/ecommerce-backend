@@ -19,7 +19,9 @@ import com.ecommerce.backend.order.domain.OrderStatus;
 import com.ecommerce.backend.order.dto.OrderCreateRequest;
 import com.ecommerce.backend.order.dto.OrderItemRequest;
 import com.ecommerce.backend.order.dto.OrderResponse;
+import com.ecommerce.backend.order.event.outbox.OutboxEvent;
 import com.ecommerce.backend.order.event.outbox.OutboxEventRepository;
+import com.ecommerce.backend.order.event.outbox.OutboxStatus;
 import com.ecommerce.backend.order.repository.OrderRepository;
 import com.ecommerce.backend.product.domain.Product;
 import com.ecommerce.backend.product.domain.ProductOption;
@@ -33,6 +35,7 @@ import java.util.function.Supplier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -137,6 +140,14 @@ class OrderServiceTest {
         assertThat(response.id()).isEqualTo(100L);
         assertThat(response.items()).hasSize(1);
         assertThat(option.getStock()).isEqualTo(3);
+
+        ArgumentCaptor<OutboxEvent> outboxCaptor = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxEventRepository).save(outboxCaptor.capture());
+        OutboxEvent savedOutbox = outboxCaptor.getValue();
+        assertThat(savedOutbox.getOrderId()).isEqualTo(100L);
+        assertThat(savedOutbox.getCustomerId()).isEqualTo(1L);
+        assertThat(savedOutbox.getTotalPriceAmount()).isEqualTo(2000);
+        assertThat(savedOutbox.getStatus()).isEqualTo(OutboxStatus.PENDING);
     }
 
     @Test
