@@ -12,7 +12,7 @@ public class PaymentService {
 
     public void capturePayment(Long orderId, Money totalPrice) {
         sleep(SIMULATED_LATENCY_MS);
-        log.info("[Payment] 결제 내역 기록 orderId={} totalPrice={}", orderId, totalPrice.intValue());
+        log.info("[Payment] PG 결제 승인 API 호출 orderId={} amount={}", orderId, totalPrice.intValue());
     }
 
     private void sleep(long ms) {
