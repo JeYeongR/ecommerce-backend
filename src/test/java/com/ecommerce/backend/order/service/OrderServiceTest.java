@@ -19,9 +19,6 @@ import com.ecommerce.backend.order.domain.OrderStatus;
 import com.ecommerce.backend.order.dto.OrderCreateRequest;
 import com.ecommerce.backend.order.dto.OrderItemRequest;
 import com.ecommerce.backend.order.dto.OrderResponse;
-import com.ecommerce.backend.order.event.outbox.OutboxEvent;
-import com.ecommerce.backend.order.event.outbox.OutboxEventRepository;
-import com.ecommerce.backend.order.event.outbox.OutboxStatus;
 import com.ecommerce.backend.order.repository.OrderRepository;
 import com.ecommerce.backend.product.domain.Product;
 import com.ecommerce.backend.product.domain.ProductOption;
@@ -35,7 +32,6 @@ import java.util.function.Supplier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -61,13 +57,13 @@ class OrderServiceTest {
     private TransactionTemplate transactionTemplate;
 
     @Mock
-    private OutboxEventRepository outboxEventRepository;
+    private OrderPaymentService orderPaymentService;
 
     private OrderService orderService;
 
     @BeforeEach
     void setUp() {
-        orderService = new OrderService(orderRepository, productOptionRepository, customerRepository, redisLockManager, transactionTemplate, outboxEventRepository);
+        orderService = new OrderService(orderRepository, productOptionRepository, customerRepository, redisLockManager, transactionTemplate, orderPaymentService);
     }
 
     private void stubLockAndTransactionPassthrough() {
@@ -82,6 +78,16 @@ class OrderServiceTest {
         given(transactionTemplate.execute(any())).willAnswer(invocation -> {
             TransactionCallback<?> callback = invocation.getArgument(0);
             return callback.doInTransaction(null);
+        });
+    }
+
+    /** save가 id 100을 부여하고, 결제 후 재조회(findById)에도 같은 주문이 돌아오게 한다. */
+    private void stubSaveAndReload() {
+        given(orderRepository.save(any(Order.class))).willAnswer(invocation -> {
+            Order order = invocation.getArgument(0);
+            ReflectionTestUtils.setField(order, "id", 100L);
+            given(orderRepository.findById(100L)).willReturn(Optional.of(order));
+            return order;
         });
     }
 
@@ -127,11 +133,7 @@ class OrderServiceTest {
         ProductOption option = option(10L, 5);
         given(customerRepository.findById(1L)).willReturn(Optional.of(customer));
         given(productOptionRepository.findAllById(Set.of(10L))).willReturn(List.of(option));
-        given(orderRepository.save(any(Order.class))).willAnswer(invocation -> {
-            Order order = invocation.getArgument(0);
-            ReflectionTestUtils.setField(order, "id", 100L);
-            return order;
-        });
+        stubSaveAndReload();
 
         OrderCreateRequest request = new OrderCreateRequest(List.of(new OrderItemRequest(10L, 2)));
 
@@ -141,13 +143,50 @@ class OrderServiceTest {
         assertThat(response.items()).hasSize(1);
         assertThat(option.getStock()).isEqualTo(3);
 
-        ArgumentCaptor<OutboxEvent> outboxCaptor = ArgumentCaptor.forClass(OutboxEvent.class);
-        verify(outboxEventRepository).save(outboxCaptor.capture());
-        OutboxEvent savedOutbox = outboxCaptor.getValue();
-        assertThat(savedOutbox.getOrderId()).isEqualTo(100L);
-        assertThat(savedOutbox.getCustomerId()).isEqualTo(1L);
-        assertThat(savedOutbox.getTotalPriceAmount()).isEqualTo(2000);
-        assertThat(savedOutbox.getStatus()).isEqualTo(OutboxStatus.PENDING);
+        verify(orderPaymentService).pay(100L, Money.of(2000));
+    }
+
+    @Test
+    void 주문_생성_결제가_거절되면_결제실패로_확정하고_재고를_복구한_뒤_예외() {
+        stubLockAndTransactionPassthrough();
+        Customer customer = customer(1L);
+        ProductOption option = option(10L, 5);
+        given(customerRepository.findById(1L)).willReturn(Optional.of(customer));
+        given(productOptionRepository.findAllById(Set.of(10L))).willReturn(List.of(option));
+        stubSaveAndReload();
+        given(orderPaymentService.pay(any(), any())).willAnswer(invocation -> {
+            Order order = orderRepository.findById(100L).orElseThrow();
+            ReflectionTestUtils.setField(order, "status", OrderStatus.PAYING);
+            return PaymentResult.DECLINED;
+        });
+
+        OrderCreateRequest request = new OrderCreateRequest(List.of(new OrderItemRequest(10L, 2)));
+
+        assertThatThrownBy(() -> orderService.create(1L, request))
+            .isInstanceOf(BusinessException.class)
+            .satisfies(e -> assertThat(((BusinessException) e).getErrorCode()).isEqualTo(ErrorCode.PAYMENT_FAILED));
+        assertThat(orderRepository.findById(100L).orElseThrow().getStatus()).isEqualTo(OrderStatus.PAYMENT_FAILED);
+        assertThat(option.getStock()).isEqualTo(5);
+    }
+
+    @Test
+    void 주문_생성_결제_결과를_모르면_결제중_상태로_응답한다() {
+        stubLockAndTransactionPassthrough();
+        Customer customer = customer(1L);
+        ProductOption option = option(10L, 5);
+        given(customerRepository.findById(1L)).willReturn(Optional.of(customer));
+        given(productOptionRepository.findAllById(Set.of(10L))).willReturn(List.of(option));
+        stubSaveAndReload();
+        given(orderPaymentService.pay(any(), any())).willAnswer(invocation -> {
+            Order order = orderRepository.findById(100L).orElseThrow();
+            ReflectionTestUtils.setField(order, "status", OrderStatus.PAYING);
+            return PaymentResult.UNKNOWN;
+        });
+
+        OrderResponse response = orderService.create(1L, new OrderCreateRequest(List.of(new OrderItemRequest(10L, 2))));
+
+        assertThat(response.status()).isEqualTo("PAYING");
+        assertThat(option.getStock()).isEqualTo(3);
     }
 
     @Test
@@ -157,11 +196,7 @@ class OrderServiceTest {
         ProductOption option = option(10L, 10);
         given(customerRepository.findById(1L)).willReturn(Optional.of(customer));
         given(productOptionRepository.findAllById(Set.of(10L))).willReturn(List.of(option));
-        given(orderRepository.save(any(Order.class))).willAnswer(invocation -> {
-            Order order = invocation.getArgument(0);
-            ReflectionTestUtils.setField(order, "id", 100L);
-            return order;
-        });
+        stubSaveAndReload();
 
         OrderCreateRequest request = new OrderCreateRequest(List.of(
             new OrderItemRequest(10L, 3),
@@ -339,5 +374,58 @@ class OrderServiceTest {
         assertThatThrownBy(() -> orderService.cancel(2L, 100L))
             .isInstanceOf(BusinessException.class)
             .satisfies(e -> assertThat(((BusinessException) e).getErrorCode()).isEqualTo(ErrorCode.ORDER_ACCESS_DENIED));
+    }
+
+    private Order orderWithItem(OrderStatus status, ProductOption option, int quantity) {
+        Order order = Order.builder()
+            .id(100L)
+            .customer(customer(1L))
+            .status(status)
+            .totalPrice(Money.of(2000))
+            .build();
+        order.addOrderItem(OrderItem.builder()
+            .productOption(option)
+            .productName(option.getDisplayName())
+            .orderPrice(Money.of(1000))
+            .quantity(quantity)
+            .build());
+        return order;
+    }
+
+    @Test
+    void 주문_취소_결제완료_주문이면_예외이고_재고는_그대로다() {
+        stubLockAndTransactionPassthrough();
+        ProductOption option = option(10L, 3);
+        given(orderRepository.findById(100L)).willReturn(Optional.of(orderWithItem(OrderStatus.PAID, option, 2)));
+
+        assertThatThrownBy(() -> orderService.cancel(1L, 100L))
+            .isInstanceOf(BusinessException.class)
+            .satisfies(e -> assertThat(((BusinessException) e).getErrorCode()).isEqualTo(ErrorCode.INVALID_ORDER_STATUS));
+        assertThat(option.getStock()).isEqualTo(3);
+    }
+
+    @Test
+    void 결제_실패_확정이면_PAYMENT_FAILED가_되고_재고가_복구된다() {
+        stubLockAndTransactionPassthrough();
+        ProductOption option = option(10L, 3);
+        Order order = orderWithItem(OrderStatus.PAYING, option, 2);
+        given(orderRepository.findById(100L)).willReturn(Optional.of(order));
+
+        orderService.failPayment(100L);
+
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.PAYMENT_FAILED);
+        assertThat(option.getStock()).isEqualTo(5);
+    }
+
+    @Test
+    void 결제_실패_확정은_결제중이_아니면_예외이고_재고는_그대로다() {
+        stubLockAndTransactionPassthrough();
+        ProductOption option = option(10L, 3);
+        given(orderRepository.findById(100L)).willReturn(Optional.of(orderWithItem(OrderStatus.PENDING, option, 2)));
+
+        assertThatThrownBy(() -> orderService.failPayment(100L))
+            .isInstanceOf(BusinessException.class)
+            .satisfies(e -> assertThat(((BusinessException) e).getErrorCode()).isEqualTo(ErrorCode.INVALID_ORDER_STATUS));
+        assertThat(option.getStock()).isEqualTo(3);
     }
 }

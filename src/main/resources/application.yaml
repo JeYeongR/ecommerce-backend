@@ -22,7 +22,7 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       properties:
-        spring.json.trusted.packages: com.ecommerce.backend.order.event.kafka
+        spring.json.trusted.packages: com.ecommerce.backend.order.event
 
 jwt:
   secret: ${JWT_SECRET:test-secret-key-must-be-at-least-32-bytes-long}

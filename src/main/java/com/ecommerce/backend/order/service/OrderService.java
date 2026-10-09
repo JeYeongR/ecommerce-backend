@@ -14,8 +14,6 @@ import com.ecommerce.backend.order.dto.OrderItemRequest;
 import com.ecommerce.backend.order.dto.OrderItemResponse;
 import com.ecommerce.backend.order.dto.OrderResponse;
 import com.ecommerce.backend.order.dto.OrderSummaryResponse;
-import com.ecommerce.backend.order.event.outbox.OutboxEvent;
-import com.ecommerce.backend.order.event.outbox.OutboxEventRepository;
 import com.ecommerce.backend.order.repository.OrderRepository;
 import com.ecommerce.backend.common.domain.Money;
 import com.ecommerce.backend.product.domain.ProductOption;
@@ -44,7 +42,7 @@ public class OrderService {
     private final CustomerRepository customerRepository;
     private final RedisLockManager redisLockManager;
     private final TransactionTemplate transactionTemplate;
-    private final OutboxEventRepository outboxEventRepository;
+    private final OrderPaymentService orderPaymentService;
 
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public OrderResponse create(Long customerId, OrderCreateRequest request) {
@@ -52,8 +50,25 @@ public class OrderService {
             .collect(Collectors.groupingBy(OrderItemRequest::productOptionId, Collectors.summingInt(OrderItemRequest::quantity)));
         List<Long> optionIds = quantities.keySet().stream().sorted().toList();
 
-        return withOptionLocks(optionIds, () ->
+        OrderResponse created = withOptionLocks(optionIds, () ->
             transactionTemplate.execute(status -> doCreate(customerId, quantities)));
+
+        // 결제는 주문 트랜잭션과 재고 락 밖에서, 같은 요청 안에서 동기로 처리한다.
+        PaymentResult result = orderPaymentService.pay(created.id(), Money.of(created.totalPrice()));
+        if (result == PaymentResult.DECLINED) {
+            failPayment(created.id());
+            throw new BusinessException(ErrorCode.PAYMENT_FAILED);
+        }
+
+        // PAID면 완료, 결과 불명이면 결제중(PAYING) 상태 그대로 돌려준다.
+        return transactionTemplate.execute(status -> toResponse(findOrder(created.id())));
+    }
+
+    private OrderResponse toResponse(Order order) {
+        List<OrderItemResponse> items = order.getOrderItems().stream()
+            .map(OrderItemResponse::from)
+            .toList();
+        return OrderResponse.of(order, items);
     }
 
     private OrderResponse doCreate(Long customerId, Map<Long, Integer> quantities) {
@@ -93,12 +108,6 @@ public class OrderService {
         }
         order.updateTotalPrice(totalPrice);
         orderRepository.save(order);
-
-        outboxEventRepository.save(OutboxEvent.builder()
-            .orderId(order.getId())
-            .customerId(customerId)
-            .totalPriceAmount(order.getTotalPrice().intValue())
-            .build());
 
         List<OrderItemResponse> itemResponses = order.getOrderItems().stream()
                 .map(OrderItemResponse::from)
@@ -143,14 +152,27 @@ public class OrderService {
 
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public OrderResponse cancel(Long customerId, Long orderId) {
-        List<Long> optionIds = transactionTemplate.execute(status -> lockKeysOf(customerId, orderId));
+        List<Long> optionIds = transactionTemplate.execute(status -> lockKeysOf(findOwnedOrder(customerId, orderId)));
 
         return withOptionLocks(optionIds, () ->
             transactionTemplate.execute(status -> doCancel(customerId, orderId)));
     }
 
-    private List<Long> lockKeysOf(Long customerId, Long orderId) {
-        return findOwnedOrder(customerId, orderId).getOrderItems().stream()
+    /** 결제 실패 확정: 주문과 결제는 함께 움직이므로 PAYMENT_FAILED로 바꾸면서 재고도 같은 트랜잭션에서 복구한다. */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public void failPayment(Long orderId) {
+        List<Long> optionIds = transactionTemplate.execute(status -> lockKeysOf(findOrder(orderId)));
+
+        withOptionLocks(optionIds, () -> transactionTemplate.execute(status -> {
+            Order order = findOrder(orderId);
+            order.markPaymentFailed();
+            restoreStock(order);
+            return null;
+        }));
+    }
+
+    private List<Long> lockKeysOf(Order order) {
+        return order.getOrderItems().stream()
             .map(item -> item.getProductOption().getId())
             .distinct()
             .sorted()
@@ -164,8 +186,8 @@ public class OrderService {
             throw new BusinessException(ErrorCode.ORDER_ALREADY_CANCELLED);
         }
 
-        order.getOrderItems().forEach(item -> item.getProductOption().increaseStock(item.getQuantity()));
         order.cancel();
+        restoreStock(order);
 
         List<OrderItemResponse> items = order.getOrderItems().stream()
                 .map(OrderItemResponse::from)
@@ -174,9 +196,17 @@ public class OrderService {
         return OrderResponse.of(order, items);
     }
 
-    private Order findOwnedOrder(Long customerId, Long orderId) {
-        Order order = orderRepository.findById(orderId)
+    private void restoreStock(Order order) {
+        order.getOrderItems().forEach(item -> item.getProductOption().increaseStock(item.getQuantity()));
+    }
+
+    private Order findOrder(Long orderId) {
+        return orderRepository.findById(orderId)
             .orElseThrow(() -> new BusinessException(ErrorCode.ORDER_NOT_FOUND));
+    }
+
+    private Order findOwnedOrder(Long customerId, Long orderId) {
+        Order order = findOrder(orderId);
 
         if (!order.getCustomer().getId().equals(customerId)) {
             throw new BusinessException(ErrorCode.ORDER_ACCESS_DENIED);

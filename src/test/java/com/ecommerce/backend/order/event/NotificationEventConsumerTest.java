@@ -1,4 +1,4 @@
-package com.ecommerce.backend.order.event.kafka;
+package com.ecommerce.backend.order.event;
 
 import static org.mockito.Mockito.verify;
 

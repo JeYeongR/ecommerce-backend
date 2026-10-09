@@ -1,6 +1,8 @@
 package com.ecommerce.backend.order.domain;
 
 import com.ecommerce.backend.customer.domain.Customer;
+import com.ecommerce.backend.common.BusinessException;
+import com.ecommerce.backend.common.ErrorCode;
 import com.ecommerce.backend.common.domain.Money;
 import jakarta.persistence.AttributeOverride;
 import jakarta.persistence.CascadeType;
@@ -68,7 +70,23 @@ public class Order {
         this.totalPrice = totalPrice;
     }
 
+    /** 결제 선점(PENDING -> PAYING)은 OrderRepository.claimForPayment가 조건부 UPDATE로 처리한다. */
+    public void markPaid() {
+        transition(OrderStatus.PAYING, OrderStatus.PAID);
+    }
+
+    public void markPaymentFailed() {
+        transition(OrderStatus.PAYING, OrderStatus.PAYMENT_FAILED);
+    }
+
     public void cancel() {
-        this.status = OrderStatus.CANCELLED;
+        transition(OrderStatus.PENDING, OrderStatus.CANCELLED);
+    }
+
+    private void transition(OrderStatus from, OrderStatus to) {
+        if (status != from) {
+            throw new BusinessException(ErrorCode.INVALID_ORDER_STATUS);
+        }
+        this.status = to;
     }
 }

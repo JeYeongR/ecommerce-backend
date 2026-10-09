@@ -29,6 +29,11 @@ public class OrderController {
 
     private final OrderService orderService;
 
+    /**
+     * 주문 생성과 결제를 한 요청에서 처리한다. 응답의 status가 PAID일 때만 주문 완료로 보여준다.
+     * PG 결과를 알 수 없으면 PAYING(결제중)으로 응답하며, 이후 확정은 GET /api/orders/{id}로 확인한다.
+     * PG가 결제를 거절하면 402와 함께 주문은 PAYMENT_FAILED로 확정되고 재고가 복구된다.
+     */
     @PostMapping
     @PreAuthorize("hasRole('CUSTOMER')")
     public ResponseEntity<ApiResponse<OrderResponse>> create(
